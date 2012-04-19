@@ -497,6 +497,7 @@
         mentionsCollection = [];
         
         var match;
+        var extra = 0;
         while(match = settings.mentionItemRegex.exec(initialText)){
           var value = match[1];
           var type = match[2];
@@ -505,8 +506,10 @@
             value: value,
             type: type,
             id: id,
-            index: match.index
+            index: match.index - extra
           });
+          
+          extra += (match[0].length - value.length);
         }
         
         updateValues();
