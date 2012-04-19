@@ -1,19 +1,22 @@
 /*
  * Mentions Input
- * Version 1.0.1
+ * Version 1.0.2
  * Written by: Kenneth Auchenberg (Podio)
+ * Modified by: Zach Snow
  *
  * Using underscore.js
  *
+ * See: https://github.com/zachsnow/jquery-mentions-input
+ * 
  * License: MIT License - http://www.opensource.org/licenses/mit-license.php
  */
-
 (function ($, _, undefined) {
 
   // Settings
   var KEY = { BACKSPACE : 8, TAB : 9, RETURN : 13, ESC : 27, LEFT : 37, UP : 38, RIGHT : 39, DOWN : 40, COMMA : 188, SPACE : 32, HOME : 36, END : 35 }; // Keys "enum"
   var defaultSettings = {
     triggerChar     : '@',
+    elastic         : true,
     fullNameTrigger : false,
     onDataRequest   : $.noop,
     minChars        : 2,
@@ -30,7 +33,8 @@
       mentionsOverlay            : _.template('<div class="mentions"><div></div></div>'),
       mentionItemSyntax          : _.template('@[<%= value %>](<%= type %>:<%= id %>)'),
       mentionItemHighlight       : _.template('<strong><span><%= value %></span></strong>')
-    }
+    },
+    mentionItemRegex: /@\[([^\]]+)\]\(([^:]+):(\d+)\)/g
   };
 
   var utils = {
@@ -134,7 +138,9 @@
         elmInputBox.bind('keyup mousedown mouseup focus', saveCursorPosition);
       }
 
-      elmInputBox.elastic();
+      if(settings.elastic){
+        elmInputBox.elastic();
+      }
     }
 
     function initAutocomplete() {
@@ -147,18 +153,26 @@
       elmMentionsOverlay = $(settings.templates.mentionsOverlay());
       elmMentionsOverlay.prependTo(elmWrapperBox);
     }
+    
 
     function saveCursorPosition(e) {
       cursorEndPosition = utils.getCaratPosition(e.target);
     }
 
     function updateValues() {
-      var syntaxMessage = getInputBoxValue();
-
+      var initialMessage = getInputBoxValue();
+      
+      var syntaxMessage = '';
+      var index = 0;
       _.each(mentionsCollection, function (mention) {
         var textSyntax = settings.templates.mentionItemSyntax({ value : mention.value, type : mention.type, id : mention.id });
-        syntaxMessage = syntaxMessage.replace(mention.value, textSyntax);
+        
+        syntaxMessage += initialMessage.substr(index, mention.index - index);
+        syntaxMessage += textSyntax;
+         
+        index = mention.index + mention.value.length;
       });
+      syntaxMessage += initialMessage.substr(index);
 
       var mentionText = utils.htmlEncode(syntaxMessage);
 
@@ -183,8 +197,14 @@
     function updateMentionsCollection() {
       var inputText = getInputBoxValue();
 
-      mentionsCollection = _.reject(mentionsCollection, function (mention, index) {
-        return !mention.value || inputText.indexOf(mention.value) == -1;
+      mentionsCollection = _.reject(mentionsCollection, function (mention) {
+        // Discard bad mentions.
+        if(!mention.value){
+          return true;
+        }
+        
+        // Expect to find the mention in the right place.
+        return inputText.indexOf(mention.value, mention.index) !== mention.index;
       });
       mentionsCollection = _.compact(mentionsCollection);
     }
@@ -222,7 +242,11 @@
       mentionsCollection.push({
         id    : id,
         type  : type,
-        value : value
+        value : value,
+        index : startCaretPosition
+      });
+      mentionsCollection = _.sortBy(mentionsCollection, function(mention){
+        return mention.index;
       });
 
       // Cleaning before inserting the value, otherwise auto-complete would be triggered with "old" inputbuffer
@@ -256,8 +280,8 @@
     }
 
     function onInputBoxInput(e) {
-      updateValues();
       updateMentionsCollection();
+      updateValues();
       hideAutoComplete();
 
       var space_index = _.lastIndexOf(inputBuffer, " ");
@@ -272,6 +296,9 @@
         if (triggerCharIndex > -1) {
           currentDataQuery = inputBuffer.slice(triggerCharIndex + 1).join('');
           currentDataQuery = utils.rtrim(currentDataQuery);
+        }
+        else {
+          currentDataQuery = null;
         }
       }
       _.defer(_.bind(doSearch, this, currentDataQuery));
@@ -296,6 +323,7 @@
         if (navigator.userAgent.indexOf("MSIE 9") > -1) {
           _.defer(updateValues);
         }
+
         return;
       }
 
@@ -336,6 +364,10 @@
           }
 
           break;
+        
+        case KEY.ESC:
+          hideAutoComplete();
+          return false;
       }
 
       return true;
@@ -358,9 +390,9 @@
 
       // Filter items that has already been mentioned
       var mentionValues = _.pluck(mentionsCollection, 'value');
-      results = _.reject(results, function (item) {
-        return _.include(mentionValues, item.name);
-      });
+      //results = _.reject(results, function (item) {
+      //  return _.include(mentionValues, item.name);
+      //});
 
       if (!results.length) {
         hideAutoComplete();
@@ -401,7 +433,7 @@
     }
 
     function doSearch(query) {
-      if (query && query.length && query.length >= settings.minChars) {
+      if (_.isString(query) && query.length >= settings.minChars) {
         if (settings.fullNameTrigger) {
           doSearchFullNameTrigger(query);
         } else {
@@ -428,21 +460,27 @@
     }
 
     // Public methods
-    return {
+    var mentionsInput = {
       init : function (options) {
         settings = options;
 
         initTextarea();
         initAutocomplete();
         initMentionsOverlay();
+        
+        var initialText = getInputBoxValue();
+        if(initialText){
+          mentionsInput.set(initialText);
+        }
       },
 
       val : function (callback) {
+        var value = mentionsCollection.length ? elmInputBox.data('messageText') : getInputBoxValue();
+        
         if (!_.isFunction(callback)) {
-          return;
+          return value;
         }
 
-        var value = mentionsCollection.length ? elmInputBox.data('messageText') : getInputBoxValue();
         callback.call(this, value);
       },
 
@@ -451,37 +489,62 @@
         mentionsCollection = [];
         updateValues();
       },
+      
+      set : function(initialText){
+        var syntaxMessage = initialText.replace(settings.mentionItemRegex, '$1');
+        elmInputBox.val(syntaxMessage);
+        
+        mentionsCollection = [];
+        
+        var match;
+        while(match = settings.mentionItemRegex.exec(initialText)){
+          var value = match[1];
+          var type = match[2];
+          var id = match[3];
+          mentionsCollection.push({
+            value: value,
+            type: type,
+            id: id,
+            index: match.index
+          });
+        }
+        
+        updateValues();
+      },
 
       getMentions : function (callback) {
         if (!_.isFunction(callback)) {
-          return;
+          return mentionsCollection;
         }
 
         callback.call(this, mentionsCollection);
       }
     };
+    
+    return mentionsInput;
   };
 
-  $.fn.mentionsInput = function (method, settings) {
+  $.fn.mentionsInput = function (method) {
+    var settings;
     if (typeof method === 'object' || !method) {
       settings = $.extend(true, {}, defaultSettings, method);
     }
 
     var outerArguments = arguments;
 
+    if(_.isString(method)){
+      var first = this[0];
+      var instance = $.data(first, 'mentionsInput');
+      if(!instance){
+        return;
+      }
+      
+      return instance[method].apply(first, outerArguments);
+    }
+    
     return this.each(function () {
       var instance = $.data(this, 'mentionsInput') || $.data(this, 'mentionsInput', new MentionsInput(this));
-
-      if (_.isFunction(instance[method])) {
-        return instance[method].apply(this, Array.prototype.slice.call(outerArguments, 1));
-
-      } else if (typeof method === 'object' || !method) {
-        return instance.init.call(this, settings);
-
-      } else {
-        $.error('Method ' + method + ' does not exist');
-      }
-
+      return instance.init.call(this, settings);
     });
   };
 
