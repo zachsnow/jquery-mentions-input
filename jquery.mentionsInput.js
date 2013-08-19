@@ -166,11 +166,16 @@
       var index = 0;
       _.each(mentionsCollection, function (mention) {
         var textSyntax = settings.templates.mentionItemSyntax({ value : mention.value, type : mention.type, id : mention.id });
+
+        var mentionIndex = initialMessage.indexOf(mention.value, index);
+        if (mentionIndex === -1) {
+          return;
+        }
         
-        syntaxMessage += initialMessage.substr(index, mention.index - index);
+        syntaxMessage += initialMessage.substr(index, mentionIndex - index);
         syntaxMessage += textSyntax;
          
-        index = mention.index + mention.value.length;
+        index = mentionIndex + mention.value.length;
       });
       syntaxMessage += initialMessage.substr(index);
 
@@ -204,7 +209,7 @@
         }
         
         // Expect to find the mention in the right place.
-        return inputText.indexOf(mention.value, mention.index) !== mention.index;
+        return inputText.indexOf(mention.value) === false;
       });
       mentionsCollection = _.compact(mentionsCollection);
     }
